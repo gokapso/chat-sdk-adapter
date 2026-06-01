@@ -1,4 +1,4 @@
-import { Actions, Button, Card, Chat, NotImplementedError } from "chat";
+import { Actions, Button, Card, Chat, NotImplementedError, emoji } from "chat";
 import { createHmac } from "node:crypto";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { createMockChatInstance } from "@chat-adapter/tests";
@@ -73,6 +73,7 @@ describe("KapsoAdapter configuration", () => {
       phoneNumberId: "123",
       waId: "15551234567",
     });
+    const redactedThreadId = "kapso:****:...4567";
 
     await adapter.postMessage(threadId, "hello");
 
@@ -82,11 +83,18 @@ describe("KapsoAdapter configuration", () => {
     );
     expect(logger.info).toHaveBeenCalledWith(
       "[debug] postMessage start",
-      expect.objectContaining({ threadId, files: 0, attachments: 0 }),
+      expect.objectContaining({
+        threadId: redactedThreadId,
+        files: 0,
+        attachments: 0,
+      }),
     );
     expect(logger.info).toHaveBeenCalledWith(
       "[debug] postMessage text sent",
-      expect.objectContaining({ threadId, messageId: "wamid.out" }),
+      expect.objectContaining({
+        threadId: redactedThreadId,
+        messageId: "wamid.out",
+      }),
     );
   });
 });
@@ -216,6 +224,24 @@ describe("Kapso webhooks", () => {
     expect(response.status).toBe(401);
   });
 
+  it("keeps signed Meta webhooks in Meta mode when an idempotency header is present", async () => {
+    const chat = createMockChatInstance();
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      appSecret: "secret",
+    });
+    await adapter.initialize(chat);
+
+    const response = await adapter.handleWebhook(
+      signedRequest(textPayload("Hello"), "secret", {
+        "x-idempotency-key": "meta-delivery-id",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat.processMessage).toHaveBeenCalledOnce();
+  });
+
   it("rejects invalid JSON when signature verification is disabled", async () => {
     const adapter = createKapsoAdapter({
       accessToken: "token",
@@ -305,6 +331,9 @@ describe("Kapso webhooks", () => {
         waId: "15551234567",
       }),
     });
+    expect(vi.mocked(chat.processReaction).mock.calls[0][0].emoji.name).toBe(
+      "thumbs_up",
+    );
   });
 });
 
@@ -469,8 +498,42 @@ describe("Kapso outbound sends", () => {
     });
   });
 
+  it("sends URL image attachments as images even without a MIME type", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+    const threadId = adapter.encodeThreadId({
+      phoneNumberId: "123",
+      waId: "15551234567",
+    });
+
+    await adapter.postMessage(threadId, {
+      markdown: "Photo",
+      attachments: [
+        {
+          type: "image",
+          url: "https://cdn.example.com/photo",
+        },
+      ],
+    });
+
+    expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
+      type: "image",
+      image: {
+        link: "https://cdn.example.com/photo",
+        caption: "Photo",
+      },
+    });
+  });
+
   it("sends and removes reactions", async () => {
-    const { fetchMock, calls } = setupFetch([sendPayload, sendPayload]);
+    const { fetchMock, calls } = setupFetch([
+      sendPayload,
+      sendPayload,
+      sendPayload,
+    ]);
     const adapter = createKapsoAdapter({
       accessToken: "token",
       fetch: fetchMock,
@@ -481,6 +544,7 @@ describe("Kapso outbound sends", () => {
     });
 
     await adapter.addReaction(threadId, "wamid.target", "👍");
+    await adapter.addReaction(threadId, "wamid.target", emoji.thumbs_down);
     await adapter.removeReaction(threadId, "wamid.target", "👍");
 
     expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
@@ -488,6 +552,10 @@ describe("Kapso outbound sends", () => {
       reaction: { message_id: "wamid.target", emoji: "👍" },
     });
     expect(JSON.parse(String(calls[1]?.init.body))).toMatchObject({
+      type: "reaction",
+      reaction: { message_id: "wamid.target", emoji: "👎" },
+    });
+    expect(JSON.parse(String(calls[2]?.init.body))).toMatchObject({
       type: "reaction",
       reaction: { message_id: "wamid.target" },
     });
@@ -564,12 +632,16 @@ describe("KapsoFormatConverter", () => {
   });
 });
 
-function signedRequest(payload: unknown, secret: string): Request {
+function signedRequest(
+  payload: unknown,
+  secret: string,
+  headers: Record<string, string> = {},
+): Request {
   const body = JSON.stringify(payload);
   const digest = createHmac("sha256", secret).update(body).digest("hex");
   return new Request("https://example.com/webhook", {
     method: "POST",
-    headers: { "x-hub-signature-256": `sha256=${digest}` },
+    headers: { ...headers, "x-hub-signature-256": `sha256=${digest}` },
     body,
   });
 }

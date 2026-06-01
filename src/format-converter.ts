@@ -2,7 +2,6 @@ import {
   BaseFormatConverter,
   parseMarkdown,
   stringifyMarkdown,
-  type AdapterPostableMessage,
   type Content,
   type FormattedContent,
   type Root,
@@ -18,10 +17,6 @@ export class KapsoFormatConverter extends BaseFormatConverter {
     return this.fromAstWithNodeConverter(ast, (node) =>
       this.nodeToWhatsApp(node),
     ).trim();
-  }
-
-  renderPostable(message: AdapterPostableMessage): string {
-    return super.renderPostable(message);
   }
 
   private nodeToWhatsApp(node: Content): string {

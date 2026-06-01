@@ -1,5 +1,8 @@
 # @kapso/chat-adapter
 
+[![npm version](https://img.shields.io/npm/v/%40kapso%2Fchat-adapter)](https://www.npmjs.com/package/@kapso/chat-adapter)
+[![npm downloads](https://img.shields.io/npm/dm/%40kapso%2Fchat-adapter)](https://www.npmjs.com/package/@kapso/chat-adapter)
+
 Kapso-first WhatsApp adapter for [Chat SDK](https://chat-sdk.dev). Use it when
 an agent needs to receive Kapso WhatsApp webhooks, reply through Chat SDK
 threads, send cards/buttons, send or receive media, and read Kapso conversation

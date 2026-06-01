@@ -2,7 +2,7 @@ import {
   ConsoleLogger,
   Message,
   NotImplementedError,
-  getEmoji,
+  defaultEmojiResolver,
   type Adapter,
   type AdapterPostableMessage,
   type Attachment,
@@ -40,9 +40,14 @@ import {
   verifySignature,
 } from "@kapso/whatsapp-cloud-api/server";
 import { Buffer } from "node:buffer";
-import { createHmac, timingSafeEqual } from "node:crypto";
 import { decodeKapsoActionId, encodeKapsoActionId } from "./action-id";
 import { KapsoFormatConverter } from "./format-converter";
+import {
+  isKapsoWebhookRequest,
+  normalizeKapsoWebhook,
+  verifyKapsoWebhookSignature,
+  type NormalizedWebhookResult,
+} from "./kapso-webhook";
 import type {
   KapsoAdapterConfig,
   KapsoRawMessage,
@@ -69,16 +74,7 @@ const DEFAULT_HISTORY_FIELDS = buildKapsoMessageFields(
 const DEFAULT_CACHE_SIZE = 200;
 const INTERACTIVE_BODY_MAX_LENGTH = 1024;
 const BUTTON_LABEL_MAX_LENGTH = 20;
-const KAPSO_MESSAGE_RECEIVED_EVENT = "whatsapp.message.received";
 const MAX_PROCESSED_WEBHOOK_KEYS = 1024;
-
-interface NormalizedWebhookResult {
-  phoneNumberId?: string;
-  displayPhoneNumber?: string;
-  contacts: Array<Record<string, unknown>>;
-  messages: UnifiedMessage[];
-  statuses: Array<Record<string, unknown>>;
-}
 
 interface MessageParseContext {
   phoneNumberId: string;
@@ -114,7 +110,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
   private readonly formatConverter: KapsoFormatConverter;
   private readonly messageCache = new Map<string, Message<KapsoRawMessage>[]>();
   private readonly latestInboundMessageByThread = new Map<string, string>();
-  private readonly processedWebhookKeys = new Map<string, number>();
+  private readonly processedWebhookKeys = new Set<string>();
 
   private chat: ChatInstance | null = null;
   private logger: Logger;
@@ -769,7 +765,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     const duplicate = this.processedWebhookKeys.has(idempotencyKey);
     if (duplicate) {
       this.logDiagnostic("Kapso webhook duplicate ignored", {
-        idempotencyKey,
+        idempotencyKey: redactId(idempotencyKey),
       });
     }
     return duplicate;
@@ -781,9 +777,9 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       return;
     }
 
-    this.processedWebhookKeys.set(idempotencyKey, Date.now());
+    this.processedWebhookKeys.add(idempotencyKey);
     while (this.processedWebhookKeys.size > MAX_PROCESSED_WEBHOOK_KEYS) {
-      const oldestKey = this.processedWebhookKeys.keys().next().value;
+      const oldestKey = this.processedWebhookKeys.values().next().value;
       if (!oldestKey) {
         break;
       }
@@ -949,7 +945,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       {
         adapter: this,
         added: rawEmoji.length > 0,
-        emoji: getEmoji(rawEmoji || "removed"),
+        emoji: defaultEmojiResolver.fromGChat(rawEmoji || "removed"),
         messageId,
         raw: rawMessage,
         rawEmoji,
@@ -1281,8 +1277,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     phoneNumberId: string,
     attachment: Attachment,
   ): Promise<MediaSendInput> {
-    const kind =
-      attachment.type === "file" ? "document" : mediaKind(attachment.mimeType);
+    const kind = mediaKindFromAttachment(attachment);
 
     if (attachment.url && !attachment.data && !attachment.fetchData) {
       return {
@@ -1455,302 +1450,8 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       return;
     }
 
-    this.logger.info(`[debug] ${message}`, details);
+    this.logger.info(`[debug] ${message}`, redactDiagnosticDetails(details));
   }
-}
-
-interface KapsoWebhookNormalizeOptions {
-  defaultPhoneNumberId?: string;
-  eventName?: string;
-  batchHeader?: string;
-}
-
-function isKapsoWebhookRequest(request: Request): boolean {
-  return (
-    request.headers.has("x-webhook-signature") ||
-    request.headers.has("x-webhook-event") ||
-    request.headers.has("x-webhook-batch") ||
-    request.headers.has("x-idempotency-key")
-  );
-}
-
-function verifyKapsoWebhookSignature(input: {
-  rawBody: string;
-  signatureHeader: string | null;
-  webhookSecret: string;
-}): boolean {
-  const signature = input.signatureHeader?.replace(/^sha256=/, "");
-  if (!signature) {
-    return false;
-  }
-
-  const expected = createHmac("sha256", input.webhookSecret)
-    .update(input.rawBody)
-    .digest("hex");
-
-  try {
-    const signatureBuffer = Buffer.from(signature, "hex");
-    const expectedBuffer = Buffer.from(expected, "hex");
-    return (
-      signatureBuffer.byteLength === expectedBuffer.byteLength &&
-      timingSafeEqual(signatureBuffer, expectedBuffer)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function normalizeKapsoWebhook(
-  payload: unknown,
-  options: KapsoWebhookNormalizeOptions,
-): NormalizedWebhookResult {
-  if (options.eventName && options.eventName !== KAPSO_MESSAGE_RECEIVED_EVENT) {
-    return {
-      contacts: [],
-      messages: [],
-      statuses: [],
-      phoneNumberId: options.defaultPhoneNumberId,
-    };
-  }
-
-  const events = extractKapsoWebhookEvents(payload, options.batchHeader);
-  const contacts: Array<Record<string, unknown>> = [];
-  const messages: UnifiedMessage[] = [];
-  let phoneNumberId = options.defaultPhoneNumberId;
-  let displayPhoneNumber: string | undefined;
-
-  for (const event of events) {
-    const eventName = readRecordString(event, "event", "type");
-    if (eventName && eventName !== KAPSO_MESSAGE_RECEIVED_EVENT) {
-      continue;
-    }
-
-    const message = readRecord(event, "message");
-    if (!message || !isKapsoWebhookMessage(message)) {
-      continue;
-    }
-
-    const conversation = readRecord(event, "conversation");
-    const eventPhoneNumberId =
-      readRecordString(event, "phone_number_id", "phoneNumberId") ??
-      readRecordString(conversation, "phone_number_id", "phoneNumberId") ??
-      phoneNumberId;
-    if (eventPhoneNumberId) {
-      phoneNumberId = eventPhoneNumberId;
-    }
-    displayPhoneNumber =
-      displayPhoneNumber ??
-      readRecordString(
-        conversation,
-        "display_phone_number",
-        "displayPhoneNumber",
-      );
-
-    const normalizedMessage = normalizeKapsoWebhookMessage(
-      message,
-      conversation,
-      eventPhoneNumberId,
-    );
-    messages.push(normalizedMessage);
-
-    const contact = contactFromKapsoWebhookMessage(
-      normalizedMessage,
-      conversation,
-    );
-    if (contact) {
-      contacts.push(contact);
-    }
-  }
-
-  return {
-    contacts,
-    displayPhoneNumber,
-    messages,
-    phoneNumberId,
-    statuses: [],
-  };
-}
-
-function extractKapsoWebhookEvents(
-  payload: unknown,
-  batchHeader?: string,
-): Record<string, unknown>[] {
-  const record = asRecord(payload);
-  if (!record) {
-    return [];
-  }
-
-  const data = record.data;
-  if (Array.isArray(data)) {
-    return data.flatMap((item) => {
-      const event = asRecord(item);
-      return event ? [event] : [];
-    });
-  }
-
-  if (batchHeader === "true") {
-    return [];
-  }
-
-  return [record];
-}
-
-function normalizeKapsoWebhookMessage(
-  message: Record<string, unknown>,
-  conversation?: Record<string, unknown>,
-  phoneNumberId?: string,
-): UnifiedMessage {
-  const normalized = { ...message } as Record<string, unknown>;
-  const kapso = {
-    ...(asRecord(message.kapso) ?? {}),
-  };
-
-  const conversationId = readRecordString(conversation, "id");
-  if (conversationId && !kapso.whatsappConversationId) {
-    kapso.whatsappConversationId = conversationId;
-  }
-
-  const contactName =
-    readRecordString(
-      conversation?.kapso as Record<string, unknown> | undefined,
-      "contactName",
-      "contact_name",
-    ) ?? readRecordString(conversation, "contactName", "contact_name");
-  if (contactName && !kapso.contactName) {
-    kapso.contactName = contactName;
-  }
-
-  const phoneNumber = readRecordString(
-    conversation,
-    "phone_number",
-    "phoneNumber",
-  );
-  if (phoneNumberId && !kapso.phoneNumberId) {
-    kapso.phoneNumberId = phoneNumberId;
-  }
-  if (phoneNumber && !kapso.phoneNumber) {
-    kapso.phoneNumber = phoneNumber;
-  }
-
-  if (!kapso.direction) {
-    kapso.direction = "inbound";
-  }
-
-  const mediaData = kapso.mediaData ?? kapso.media_data;
-  if (mediaData && !kapso.mediaData) {
-    kapso.mediaData = mediaData;
-  }
-  if (kapso.media_url && !kapso.mediaUrl) {
-    kapso.mediaUrl = kapso.media_url;
-  }
-  if (kapso.order_text && !kapso.orderText) {
-    kapso.orderText = kapso.order_text;
-  }
-
-  normalized.kapso = kapso;
-
-  const fallbackFrom = normalizePhoneNumber(phoneNumber);
-  if (!normalized.from && fallbackFrom) {
-    normalized.from = fallbackFrom;
-  }
-
-  const reaction = asRecord(normalized.reaction);
-  if (reaction?.message_id && !reaction.messageId) {
-    normalized.reaction = {
-      ...reaction,
-      messageId: reaction.message_id,
-    };
-  }
-
-  const interactive = asRecord(normalized.interactive);
-  if (interactive?.button_reply && !interactive.buttonReply) {
-    normalized.interactive = {
-      ...interactive,
-      buttonReply: interactive.button_reply,
-    };
-  }
-  if (interactive?.list_reply && !interactive.listReply) {
-    normalized.interactive = {
-      ...interactive,
-      listReply: interactive.list_reply,
-    };
-  }
-
-  return normalized as UnifiedMessage;
-}
-
-function contactFromKapsoWebhookMessage(
-  message: UnifiedMessage,
-  conversation?: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const waId =
-    message.from ??
-    normalizePhoneNumber(
-      readRecordString(conversation, "phone_number", "phoneNumber"),
-    );
-  if (!waId) {
-    return undefined;
-  }
-
-  const name =
-    kapsoString(message, "contactName", "contact_name") ??
-    readRecordString(
-      conversation?.kapso as Record<string, unknown> | undefined,
-      "contactName",
-      "contact_name",
-    ) ??
-    waId;
-
-  return {
-    waId,
-    wa_id: waId,
-    displayName: name,
-    profileName: name,
-    profile: { name },
-  };
-}
-
-function isKapsoWebhookMessage(value: Record<string, unknown>): boolean {
-  return (
-    typeof value.id === "string" &&
-    typeof value.type === "string" &&
-    typeof value.timestamp === "string"
-  );
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object"
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readRecord(
-  source: Record<string, unknown> | undefined,
-  key: string,
-): Record<string, unknown> | undefined {
-  return asRecord(source?.[key]);
-}
-
-function readRecordString(
-  source: Record<string, unknown> | undefined,
-  ...keys: string[]
-): string | undefined {
-  for (const key of keys) {
-    const value = source?.[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function normalizePhoneNumber(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-
-  const normalized = value.replace(/\D/g, "");
-  return normalized.length > 0 ? normalized : undefined;
 }
 
 function bufferToTypedBlob(buffer: Buffer, type: string): Blob {
@@ -1784,11 +1485,46 @@ function describeError(error: unknown): Record<string, unknown> {
     return {
       name: error.name,
       message: error.message,
-      stack: error.stack,
     };
   }
 
   return { message: String(error) };
+}
+
+function redactDiagnosticDetails(
+  details: Record<string, unknown>,
+): Record<string, unknown> {
+  const redacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(details)) {
+    const normalizedKey = key.toLowerCase();
+    redacted[key] =
+      normalizedKey === "threadid" || normalizedKey === "channelid"
+        ? redactThreadLikeId(value)
+        : value;
+  }
+  return redacted;
+}
+
+function redactThreadLikeId(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const parts = value.split(":");
+  if (parts[0] !== "kapso" || (parts.length !== 3 && parts.length !== 4)) {
+    return redactId(value);
+  }
+
+  try {
+    const phoneNumberId = redactId(decodePart(parts[1])) ?? "****";
+    const waId = redactId(decodePart(parts[2])) ?? "****";
+    const conversationId = parts[3] ? redactId(decodePart(parts[3])) : undefined;
+    return ["kapso", phoneNumberId, waId, conversationId]
+      .filter(Boolean)
+      .join(":");
+  } catch {
+    return "kapso:****";
+  }
 }
 
 function createWhatsAppClient(config: KapsoAdapterConfig): WhatsAppClient {
@@ -2093,6 +1829,20 @@ function mediaKind(
   return "document";
 }
 
+function mediaKindFromAttachment(attachment: Attachment): MediaSendInput["kind"] {
+  const inferred = mediaKind(attachment.mimeType, attachment.name);
+  switch (attachment.type) {
+    case "image":
+      return inferred === "sticker" ? "sticker" : "image";
+    case "video":
+      return "video";
+    case "audio":
+      return "audio";
+    case "file":
+      return "document";
+  }
+}
+
 function supportsCaption(kind: MediaSendInput["kind"]): boolean {
   return kind === "image" || kind === "video" || kind === "document";
 }
@@ -2104,18 +1854,5 @@ function firstMessageId(
 }
 
 function emojiToWhatsApp(emoji: EmojiValue | string): string {
-  if (typeof emoji === "string") return emoji;
-
-  const name = emoji.name;
-  const map: Record<string, string> = {
-    thumbs_up: "👍",
-    thumbsup: "👍",
-    heart: "❤️",
-    fire: "🔥",
-    clap: "👏",
-    joy: "😂",
-    smile: "🙂",
-    wave: "👋",
-  };
-  return map[name] ?? String(emoji);
+  return defaultEmojiResolver.toGChat(emoji);
 }

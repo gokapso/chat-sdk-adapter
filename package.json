@@ -1,6 +1,6 @@
 {
   "name": "@kapso/chat-adapter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Kapso WhatsApp adapter for Chat SDK",
   "type": "module",
   "sideEffects": false,
@@ -26,7 +26,7 @@
     "clean": "rm -rf dist coverage"
   },
   "peerDependencies": {
-    "chat": ">=4.0.0"
+    "chat": "^4.29.0"
   },
   "dependencies": {
     "@chat-adapter/shared": "^4.29.0",
