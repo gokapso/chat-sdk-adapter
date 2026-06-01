@@ -1,0 +1,59 @@
+{
+  "name": "@kapso/chat-adapter",
+  "version": "0.1.0",
+  "description": "Kapso WhatsApp adapter for Chat SDK",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "sample-messages.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist coverage"
+  },
+  "peerDependencies": {
+    "chat": "^4.29.0"
+  },
+  "dependencies": {
+    "@chat-adapter/shared": "^4.29.0",
+    "@kapso/whatsapp-cloud-api": "^0.2.1"
+  },
+  "devDependencies": {
+    "@chat-adapter/state-memory": "^4.29.0",
+    "@chat-adapter/tests": "^4.29.0",
+    "@types/node": "^25.3.2",
+    "@vitest/coverage-v8": "^4.0.18",
+    "chat": "^4.29.0",
+    "tsup": "^8.5.1",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "chat-sdk",
+    "chat-adapter",
+    "kapso",
+    "whatsapp",
+    "whatsapp-cloud-api"
+  ],
+  "license": "MIT"
+}
