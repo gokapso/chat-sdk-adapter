@@ -97,9 +97,7 @@ interface MediaSendInput {
 }
 
 /** Chat SDK adapter for Kapso's WhatsApp Cloud API SDK. */
-export class KapsoAdapter
-  implements Adapter<KapsoThreadId, KapsoRawMessage>
-{
+export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
   readonly name = "kapso";
   readonly lockScope = "channel" as const;
   readonly persistThreadHistory = true;
@@ -114,10 +112,7 @@ export class KapsoAdapter
   private readonly cacheSize: number;
   private readonly debugLogging: boolean;
   private readonly formatConverter: KapsoFormatConverter;
-  private readonly messageCache = new Map<
-    string,
-    Message<KapsoRawMessage>[]
-  >();
+  private readonly messageCache = new Map<string, Message<KapsoRawMessage>[]>();
   private readonly latestInboundMessageByThread = new Map<string, string>();
   private readonly processedWebhookKeys = new Map<string, number>();
 
@@ -129,7 +124,8 @@ export class KapsoAdapter
   constructor(config: KapsoAdapterConfig = {}) {
     this.client = config.client ?? createWhatsAppClient(config);
     this.webhookSecret = config.webhookSecret ?? env("KAPSO_WEBHOOK_SECRET");
-    this.appSecret = config.appSecret ?? env("WHATSAPP_APP_SECRET") ?? env("META_APP_SECRET");
+    this.appSecret =
+      config.appSecret ?? env("WHATSAPP_APP_SECRET") ?? env("META_APP_SECRET");
     this.webhookVerifyToken =
       config.webhookVerifyToken ?? env("WHATSAPP_WEBHOOK_VERIFY_TOKEN");
     this.verifyWebhookSignatures = config.verifyWebhookSignatures ?? true;
@@ -141,7 +137,12 @@ export class KapsoAdapter
     this.cacheSize = config.cacheSize ?? DEFAULT_CACHE_SIZE;
     this.debugLogging = config.debug ?? false;
     this.formatConverter = new KapsoFormatConverter();
-    this.logger = config.logger ?? new ConsoleLogger(config.logLevel ?? (this.debugLogging ? "debug" : "info"), "kapso");
+    this.logger =
+      config.logger ??
+      new ConsoleLogger(
+        config.logLevel ?? (this.debugLogging ? "debug" : "info"),
+        "kapso",
+      );
     this._userName =
       config.userName ??
       env("KAPSO_BOT_USERNAME") ??
@@ -391,9 +392,12 @@ export class KapsoAdapter
     const thread = this.decodeThreadId(threadId);
     const messageId = this.latestInboundMessageByThread.get(threadId);
     if (!messageId) {
-      this.logger.debug("No inbound message available for WhatsApp typing indicator", {
-        threadId,
-      });
+      this.logger.debug(
+        "No inbound message available for WhatsApp typing indicator",
+        {
+          threadId,
+        },
+      );
       this.logDiagnostic("startTyping skipped: no latest inbound message", {
         threadId,
       });
@@ -448,8 +452,8 @@ export class KapsoAdapter
             .sort(compareMessages);
           const nextCursor =
             options.direction === "forward"
-              ? page.paging?.cursors?.after ?? undefined
-              : page.paging?.cursors?.before ?? undefined;
+              ? (page.paging?.cursors?.after ?? undefined)
+              : (page.paging?.cursors?.before ?? undefined);
           this.logDiagnostic("fetchMessages Kapso history result", {
             threadId,
             conversationId,
@@ -459,10 +463,13 @@ export class KapsoAdapter
           return { messages, nextCursor };
         }
       } catch (error) {
-        this.logger.warn("Falling back to cached messages after Kapso history fetch failed", {
-          error: String(error),
-          threadId,
-        });
+        this.logger.warn(
+          "Falling back to cached messages after Kapso history fetch failed",
+          {
+            error: String(error),
+            threadId,
+          },
+        );
         this.logDiagnostic("fetchMessages Kapso history failed", {
           threadId,
           error: describeError(error),
@@ -585,14 +592,20 @@ export class KapsoAdapter
   decodeThreadId(threadId: string): KapsoThreadId {
     const parts = threadId.split(":");
     if (parts[0] !== "kapso" || (parts.length !== 3 && parts.length !== 4)) {
-      throw new ValidationError("kapso", `Invalid Kapso thread ID: ${threadId}`);
+      throw new ValidationError(
+        "kapso",
+        `Invalid Kapso thread ID: ${threadId}`,
+      );
     }
 
     const phoneNumberId = decodePart(parts[1]);
     const waId = decodePart(parts[2]);
     const conversationId = parts[3] ? decodePart(parts[3]) : undefined;
     if (!phoneNumberId || !waId) {
-      throw new ValidationError("kapso", `Invalid Kapso thread ID: ${threadId}`);
+      throw new ValidationError(
+        "kapso",
+        `Invalid Kapso thread ID: ${threadId}`,
+      );
     }
 
     return { phoneNumberId, waId, conversationId };
@@ -691,7 +704,8 @@ export class KapsoAdapter
       });
     }
 
-    const signatureHeader = request.headers.get("x-hub-signature-256") ?? undefined;
+    const signatureHeader =
+      request.headers.get("x-hub-signature-256") ?? undefined;
     const valid = verifySignature({
       appSecret: this.appSecret,
       rawBody,
@@ -702,7 +716,8 @@ export class KapsoAdapter
       ? (this.logDiagnostic("webhook signature verified"), undefined)
       : (this.logDiagnostic("webhook rejected: invalid signature", {
           hasSignature: Boolean(signatureHeader),
-        }), new Response("Invalid signature", { status: 401 }));
+        }),
+        new Response("Invalid signature", { status: 401 }));
   }
 
   private verifyKapsoWebhookRequest(
@@ -722,9 +737,12 @@ export class KapsoAdapter
 
     if (!this.webhookSecret) {
       this.logDiagnostic("Kapso webhook rejected: missing webhook secret");
-      return new Response("Kapso webhook signature verification is not configured", {
-        status: 401,
-      });
+      return new Response(
+        "Kapso webhook signature verification is not configured",
+        {
+          status: 401,
+        },
+      );
     }
 
     const signatureHeader = request.headers.get("x-webhook-signature");
@@ -738,7 +756,8 @@ export class KapsoAdapter
       ? (this.logDiagnostic("Kapso webhook signature verified"), undefined)
       : (this.logDiagnostic("Kapso webhook rejected: invalid signature", {
           hasSignature: Boolean(signatureHeader),
-        }), new Response("Invalid signature", { status: 401 }));
+        }),
+        new Response("Invalid signature", { status: 401 }));
   }
 
   private isDuplicateKapsoDelivery(request: Request): boolean {
@@ -787,9 +806,12 @@ export class KapsoAdapter
       normalized.phoneNumberId ??
       this.defaultPhoneNumberId;
     if (!phoneNumberId) {
-      this.logger.warn("Skipping WhatsApp webhook message without phoneNumberId", {
-        messageId: rawMessage.id,
-      });
+      this.logger.warn(
+        "Skipping WhatsApp webhook message without phoneNumberId",
+        {
+          messageId: rawMessage.id,
+        },
+      );
       return;
     }
 
@@ -805,9 +827,12 @@ export class KapsoAdapter
       conversationId,
     });
     if (!threadData) {
-      this.logger.warn("Skipping WhatsApp webhook message without participant", {
-        messageId: rawMessage.id,
-      });
+      this.logger.warn(
+        "Skipping WhatsApp webhook message without participant",
+        {
+          messageId: rawMessage.id,
+        },
+      );
       return;
     }
 
@@ -821,22 +846,32 @@ export class KapsoAdapter
       waId: redactId(threadData.waId),
     });
     if (isReactionMessage(rawMessage)) {
-      this.dispatchReaction(rawMessage, threadId, {
-        phoneNumberId,
-        displayPhoneNumber: normalized.displayPhoneNumber,
-        contact,
-        conversationId,
-      }, options);
+      this.dispatchReaction(
+        rawMessage,
+        threadId,
+        {
+          phoneNumberId,
+          displayPhoneNumber: normalized.displayPhoneNumber,
+          contact,
+          conversationId,
+        },
+        options,
+      );
       return;
     }
 
     if (isInteractiveActionMessage(rawMessage)) {
-      this.dispatchAction(rawMessage, threadId, {
-        phoneNumberId,
-        displayPhoneNumber: normalized.displayPhoneNumber,
-        contact,
-        conversationId,
-      }, options);
+      this.dispatchAction(
+        rawMessage,
+        threadId,
+        {
+          phoneNumberId,
+          displayPhoneNumber: normalized.displayPhoneNumber,
+          contact,
+          conversationId,
+        },
+        options,
+      );
       return;
     }
 
@@ -991,8 +1026,8 @@ export class KapsoAdapter
     context: MessageParseContext,
   ): KapsoThreadId | null {
     const waId = isOutbound(raw)
-      ? raw.to ?? kapsoString(raw, "phoneNumber", "phone_number")
-      : raw.from ?? contactWaId(context.contact);
+      ? (raw.to ?? kapsoString(raw, "phoneNumber", "phone_number"))
+      : (raw.from ?? contactWaId(context.contact));
     if (!waId) {
       return null;
     }
@@ -1052,10 +1087,12 @@ export class KapsoAdapter
     card: CardElement,
   ): Promise<RawMessage<KapsoRawMessage>> {
     const text = fitInteractiveBody(
-      this.formatConverter.fromMarkdown(cardToFallbackText(card, {
-        boldFormat: "**",
-        platform: "gchat",
-      })),
+      this.formatConverter.fromMarkdown(
+        cardToFallbackText(card, {
+          boldFormat: "**",
+          platform: "gchat",
+        }),
+      ),
     );
     const actions = collectActions(card);
     const buttons = actions.actionButtons.filter((button) => !button.disabled);
@@ -1503,7 +1540,11 @@ function normalizeKapsoWebhook(
     }
     displayPhoneNumber =
       displayPhoneNumber ??
-      readRecordString(conversation, "display_phone_number", "displayPhoneNumber");
+      readRecordString(
+        conversation,
+        "display_phone_number",
+        "displayPhoneNumber",
+      );
 
     const normalizedMessage = normalizeKapsoWebhookMessage(
       message,
@@ -1570,13 +1611,20 @@ function normalizeKapsoWebhookMessage(
   }
 
   const contactName =
-    readRecordString(conversation?.kapso as Record<string, unknown> | undefined, "contactName", "contact_name") ??
-    readRecordString(conversation, "contactName", "contact_name");
+    readRecordString(
+      conversation?.kapso as Record<string, unknown> | undefined,
+      "contactName",
+      "contact_name",
+    ) ?? readRecordString(conversation, "contactName", "contact_name");
   if (contactName && !kapso.contactName) {
     kapso.contactName = contactName;
   }
 
-  const phoneNumber = readRecordString(conversation, "phone_number", "phoneNumber");
+  const phoneNumber = readRecordString(
+    conversation,
+    "phone_number",
+    "phoneNumber",
+  );
   if (phoneNumberId && !kapso.phoneNumberId) {
     kapso.phoneNumberId = phoneNumberId;
   }
@@ -1637,14 +1685,20 @@ function contactFromKapsoWebhookMessage(
 ): Record<string, unknown> | undefined {
   const waId =
     message.from ??
-    normalizePhoneNumber(readRecordString(conversation, "phone_number", "phoneNumber"));
+    normalizePhoneNumber(
+      readRecordString(conversation, "phone_number", "phoneNumber"),
+    );
   if (!waId) {
     return undefined;
   }
 
   const name =
     kapsoString(message, "contactName", "contact_name") ??
-    readRecordString(conversation?.kapso as Record<string, unknown> | undefined, "contactName", "contact_name") ??
+    readRecordString(
+      conversation?.kapso as Record<string, unknown> | undefined,
+      "contactName",
+      "contact_name",
+    ) ??
     waId;
 
   return {
@@ -1741,7 +1795,9 @@ function createWhatsAppClient(config: KapsoAdapterConfig): WhatsAppClient {
   const accessToken = config.accessToken ?? env("WHATSAPP_ACCESS_TOKEN");
   const kapsoApiKey = config.kapsoApiKey ?? env("KAPSO_API_KEY");
   const baseUrl =
-    config.baseUrl ?? env("KAPSO_BASE_URL") ?? (kapsoApiKey ? DEFAULT_KAPSO_BASE_URL : undefined);
+    config.baseUrl ??
+    env("KAPSO_BASE_URL") ??
+    (kapsoApiKey ? DEFAULT_KAPSO_BASE_URL : undefined);
 
   if (!accessToken && !kapsoApiKey) {
     throw new ValidationError(
@@ -1762,7 +1818,7 @@ function createWhatsAppClient(config: KapsoAdapterConfig): WhatsAppClient {
 function env(key: string): string | undefined {
   if (typeof process === "undefined") return undefined;
   const value = process.env[key];
-  return value && value.trim() ? value : undefined;
+  return value?.trim() ? value : undefined;
 }
 
 function encodePart(value: string): string {
@@ -1774,18 +1830,21 @@ function decodePart(value: string | undefined): string {
   try {
     return Buffer.from(value, "base64url").toString("utf8");
   } catch {
-    throw new ValidationError("kapso", "Invalid base64url Kapso thread ID part.");
+    throw new ValidationError(
+      "kapso",
+      "Invalid base64url Kapso thread ID part.",
+    );
   }
 }
 
 function isUnifiedMessage(raw: KapsoRawMessage): raw is UnifiedMessage {
   return Boolean(
     raw &&
-      typeof raw === "object" &&
-      "id" in raw &&
-      typeof (raw as UnifiedMessage).id === "string" &&
-      "type" in raw &&
-      typeof (raw as UnifiedMessage).type === "string",
+    typeof raw === "object" &&
+    "id" in raw &&
+    typeof (raw as UnifiedMessage).id === "string" &&
+    "type" in raw &&
+    typeof (raw as UnifiedMessage).type === "string",
   );
 }
 
@@ -1867,7 +1926,9 @@ function kapsoString(
   return undefined;
 }
 
-function kapsoMediaData(raw: UnifiedMessage): Record<string, unknown> | undefined {
+function kapsoMediaData(
+  raw: UnifiedMessage,
+): Record<string, unknown> | undefined {
   const kapso = raw.kapso as Record<string, unknown> | undefined;
   const mediaData = kapso?.mediaData ?? kapso?.media_data;
   return mediaData && typeof mediaData === "object"
@@ -1901,9 +1962,7 @@ function messageText(raw: UnifiedMessage): string {
   if (raw.video?.caption) return raw.video.caption;
   if (raw.document?.caption) return raw.document.caption;
   if (raw.location) {
-    return [raw.location.name, raw.location.address]
-      .filter(Boolean)
-      .join("\n");
+    return [raw.location.name, raw.location.address].filter(Boolean).join("\n");
   }
   if (raw.reaction?.emoji) return raw.reaction.emoji;
   const reply = interactiveReply(raw);
@@ -2021,9 +2080,13 @@ function fitButtonLabel(label: string): string {
   return label;
 }
 
-function mediaKind(mimeType?: string, filename?: string): MediaSendInput["kind"] {
+function mediaKind(
+  mimeType?: string,
+  filename?: string,
+): MediaSendInput["kind"] {
   const source = `${mimeType ?? ""} ${filename ?? ""}`.toLowerCase();
-  if (source.includes("image/webp") || source.endsWith(".webp")) return "sticker";
+  if (source.includes("image/webp") || source.endsWith(".webp"))
+    return "sticker";
   if (source.startsWith("image/")) return "image";
   if (source.startsWith("video/")) return "video";
   if (source.startsWith("audio/")) return "audio";
@@ -2034,7 +2097,9 @@ function supportsCaption(kind: MediaSendInput["kind"]): boolean {
   return kind === "image" || kind === "video" || kind === "document";
 }
 
-function firstMessageId(response: SendMessageResponse | undefined): string | undefined {
+function firstMessageId(
+  response: SendMessageResponse | undefined,
+): string | undefined {
   return response?.messages?.[0]?.id;
 }
 
