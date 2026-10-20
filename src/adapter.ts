@@ -32,6 +32,7 @@ import {
 import {
   WhatsAppClient,
   buildKapsoMessageFields,
+  isBusinessScopedUserId,
   type SendMessageResponse,
   type UnifiedMessage,
 } from "@kapso/whatsapp-cloud-api";
@@ -304,7 +305,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
 
       const response = await this.client.messages.sendText({
         phoneNumberId: thread.phoneNumberId,
-        to: thread.waId,
+        ...recipientFor(thread.waId),
         body: text,
       });
       this.logDiagnostic("postMessage text sent", {
@@ -351,7 +352,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     });
     await this.client.messages.sendReaction({
       phoneNumberId: thread.phoneNumberId,
-      to: thread.waId,
+      ...recipientFor(thread.waId),
       reaction: {
         messageId,
         emoji: emojiToWhatsApp(emoji),
@@ -375,7 +376,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     });
     await this.client.messages.sendReaction({
       phoneNumberId: thread.phoneNumberId,
-      to: thread.waId,
+      ...recipientFor(thread.waId),
       reaction: { messageId },
     });
     this.logDiagnostic("removeReaction sent", {
@@ -1002,7 +1003,11 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       };
     }
 
-    const waId = raw.from ?? contactWaId(context.contact) ?? "unknown";
+    const waId =
+      raw.from ??
+      contactWaId(context.contact) ??
+      raw.fromUserId ??
+      "unknown";
     const name =
       contactName(context.contact) ??
       kapsoString(raw, "contactName", "contact_name") ??
@@ -1022,8 +1027,10 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     context: MessageParseContext,
   ): KapsoThreadId | null {
     const waId = isOutbound(raw)
-      ? (raw.to ?? kapsoString(raw, "phoneNumber", "phone_number"))
-      : (raw.from ?? contactWaId(context.contact));
+      ? (raw.to ??
+        kapsoString(raw, "phoneNumber", "phone_number") ??
+        raw.toUserId)
+      : (raw.from ?? contactWaId(context.contact) ?? raw.fromUserId);
     if (!waId) {
       return null;
     }
@@ -1110,7 +1117,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
 
       const response = await this.client.messages.sendInteractiveButtons({
         phoneNumberId: thread.phoneNumberId,
-        to: thread.waId,
+        ...recipientFor(thread.waId),
         bodyText: text || "Choose an option",
         header: card.imageUrl
           ? { type: "image", image: { link: card.imageUrl } }
@@ -1131,7 +1138,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
     if (link) {
       const response = await this.client.messages.sendInteractiveCtaUrl({
         phoneNumberId: thread.phoneNumberId,
-        to: thread.waId,
+        ...recipientFor(thread.waId),
         bodyText: text || link.label,
         header: card.imageUrl
           ? { type: "image", image: { link: card.imageUrl } }
@@ -1150,7 +1157,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
 
     const response = await this.client.messages.sendText({
       phoneNumberId: thread.phoneNumberId,
-      to: thread.waId,
+      ...recipientFor(thread.waId),
       body: text || card.title || " ",
     });
     this.logDiagnostic("postCard fallback text sent", {
@@ -1212,7 +1219,7 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       responses.unshift(
         await this.client.messages.sendText({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           body: text,
         }),
       );
@@ -1338,31 +1345,31 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       case "image":
         return this.client.messages.sendImage({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           image: { ...ref, caption: media.caption },
         });
       case "video":
         return this.client.messages.sendVideo({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           video: { ...ref, caption: media.caption },
         });
       case "audio":
         return this.client.messages.sendAudio({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           audio: ref,
         });
       case "sticker":
         return this.client.messages.sendSticker({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           sticker: ref,
         });
       case "document":
         return this.client.messages.sendDocument({
           phoneNumberId: thread.phoneNumberId,
-          to: thread.waId,
+          ...recipientFor(thread.waId),
           document: {
             ...ref,
             caption: media.caption,
@@ -1636,6 +1643,10 @@ function findContact(
 function contactWaId(contact?: Record<string, unknown>): string | undefined {
   const waId = contact?.waId ?? contact?.wa_id;
   return typeof waId === "string" ? waId : undefined;
+}
+
+function recipientFor(id: string): { to: string } | { recipient: string } {
+  return isBusinessScopedUserId(id) ? { recipient: id } : { to: id };
 }
 
 function contactName(contact?: Record<string, unknown>): string | undefined {

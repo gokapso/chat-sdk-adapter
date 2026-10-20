@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@chat-adapter/shared": "^4.29.0",
-    "@kapso/whatsapp-cloud-api": "^0.2.1"
+    "@kapso/whatsapp-cloud-api": "^0.3.0"
   },
   "devDependencies": {
     "@chat-adapter/state-memory": "^4.29.0",

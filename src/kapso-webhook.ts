@@ -206,6 +206,10 @@ function normalizeKapsoWebhookMessage(
     normalized.from = fallbackFrom;
   }
 
+  if (!normalized.fromUserId && normalized.from_user_id) {
+    normalized.fromUserId = normalized.from_user_id;
+  }
+
   const reaction = asRecord(normalized.reaction);
   if (reaction?.message_id && !reaction.messageId) {
     normalized.reaction = {

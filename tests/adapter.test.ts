@@ -286,6 +286,35 @@ describe("Kapso webhooks", () => {
     });
   });
 
+  it("dispatches BSUID-only Kapso webhooks with the BSUID as participant", async () => {
+    const chat = createMockChatInstance();
+    const adapter = createKapsoAdapter({
+      kapsoApiKey: "key",
+      phoneNumberId: "123",
+      webhookSecret: "secret",
+    });
+    await adapter.initialize(chat);
+
+    const response = await adapter.handleWebhook(
+      kapsoSignedRequest(kapsoBsuidMessageReceivedPayload("Hello"), "secret"),
+    );
+
+    expect(response.status).toBe(200);
+    expect(chat.processMessage).toHaveBeenCalledOnce();
+    const [, threadId, message] = vi.mocked(chat.processMessage).mock.calls[0];
+    expect(threadId).toBe(
+      adapter.encodeThreadId({
+        phoneNumberId: "123",
+        waId: "CO.13491208655302741918",
+        conversationId: "conv-1",
+      }),
+    );
+    expect(message).toMatchObject({
+      id: "wamid.kapso",
+      author: { userId: "CO.13491208655302741918", isMe: false },
+    });
+  });
+
   it("dispatches interactive replies through processAction", async () => {
     const chat = createMockChatInstance();
     const adapter = createKapsoAdapter({
@@ -419,6 +448,24 @@ describe("Kapso outbound sends", () => {
       text: { body: "*Hello*" },
       to: "15551234567",
     });
+  });
+
+  it("sends to a BSUID with recipient instead of to", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+    const threadId = adapter.encodeThreadId({
+      phoneNumberId: "123",
+      waId: "CO.13491208655302741918",
+    });
+
+    await adapter.postMessage(threadId, { markdown: "Hello" });
+
+    const body = JSON.parse(String(calls[0]?.init.body));
+    expect(body.recipient).toBe("CO.13491208655302741918");
+    expect(body.to).toBeUndefined();
   });
 
   it("sends cards as WhatsApp reply buttons", async () => {
@@ -712,6 +759,29 @@ function kapsoMessageReceivedPayload(body: string) {
     },
     message: {
       from: "15551234567",
+      id: "wamid.kapso",
+      timestamp: "1735689600",
+      type: "text",
+      text: { body },
+      kapso: {
+        direction: "inbound",
+        content: body,
+      },
+    },
+  };
+}
+
+function kapsoBsuidMessageReceivedPayload(body: string) {
+  return {
+    event: "whatsapp.message.received",
+    phone_number_id: "123",
+    conversation: {
+      id: "conv-1",
+      phone_number_id: "123",
+      business_scoped_user_id: "CO.13491208655302741918",
+    },
+    message: {
+      from_user_id: "CO.13491208655302741918",
       id: "wamid.kapso",
       timestamp: "1735689600",
       type: "text",
