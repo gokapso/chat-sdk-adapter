@@ -129,6 +129,25 @@ const thread = bot.thread(threadId);
 await thread.post("Hello from Kapso.");
 ```
 
+Streams such as an AI SDK `result.fullStream` are buffered. WhatsApp cannot
+edit sent messages, so the adapter waits for the stream to finish and sends the
+full reply as one message rather than delivering it token by token. If the
+stream throws or produces no text, `thread.post` rejects and nothing is sent.
+
+AI SDK reports model errors and aborts as stream events rather than throwing,
+and Chat SDK drops those events before they reach the adapter. A generation
+that fails or is aborted partway is therefore sent with the text produced so
+far. Use `streamText`'s `onError` and `onAbort` callbacks to detect these cases.
+
+```ts
+import { streamText } from "ai";
+
+bot.onDirectMessage(async (thread) => {
+  const result = streamText({ model, prompt: "Say hello" });
+  await thread.post(result.fullStream);
+});
+```
+
 ## Buttons
 
 Chat SDK cards with buttons become WhatsApp reply buttons.
@@ -219,6 +238,7 @@ const decoded = adapter.decodeThreadId(threadId);
 | Kapso platform webhooks | Yes, `POST` with `X-Webhook-Signature` |
 | Batched Kapso webhook payloads | Yes, when Kapso sends `data: [...]` |
 | Text send/receive | Yes |
+| Streaming (`thread.post(stream)`) | Buffered and sent as one message |
 | Markdown formatting | Basic WhatsApp-compatible formatting |
 | Cards/buttons | Up to 3 reply buttons |
 | CTA URL card button | Yes |

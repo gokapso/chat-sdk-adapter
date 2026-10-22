@@ -18,6 +18,8 @@ import {
   type LinkButtonElement,
   type Logger,
   type RawMessage,
+  type StreamChunk,
+  type StreamOptions,
   type ThreadInfo,
   type WebhookOptions,
 } from "chat";
@@ -319,6 +321,28 @@ export class KapsoAdapter implements Adapter<KapsoThreadId, KapsoRawMessage> {
       });
       throw error;
     }
+  }
+
+  /**
+   * Buffer a streamed response and send it as one WhatsApp message.
+   *
+   * WhatsApp cannot edit sent messages, so Chat SDK's post-and-edit fallback
+   * cannot deliver streams. Nothing is sent until the stream completes.
+   */
+  async stream(
+    threadId: string,
+    textStream: AsyncIterable<string | StreamChunk>,
+    _options?: StreamOptions,
+  ): Promise<RawMessage<KapsoRawMessage>> {
+    let text = "";
+    for await (const chunk of textStream) {
+      if (typeof chunk === "string") {
+        text += chunk;
+      } else if (chunk.type === "markdown_text") {
+        text += chunk.text;
+      }
+    }
+    return this.postMessage(threadId, { markdown: text });
   }
 
   async editMessage(

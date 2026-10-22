@@ -1,4 +1,5 @@
 import { Actions, Button, Card, Chat, NotImplementedError, emoji } from "chat";
+import type { StreamChunk } from "chat";
 import { createHmac } from "node:crypto";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import { createMockChatInstance } from "@chat-adapter/tests";
@@ -621,6 +622,233 @@ describe("Kapso history and integration", () => {
     });
   });
 });
+
+describe("Kapso streaming", () => {
+  const threadData = { phoneNumberId: "123", waId: "15551234567" };
+
+  it("buffers string chunks into one WhatsApp text message", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+
+    const result = await adapter.stream(
+      adapter.encodeThreadId(threadData),
+      streamOf([
+        "Hello ",
+        "from the ",
+        "**agent**.",
+        "\n\n",
+        "Second ",
+        "paragraph.",
+      ]),
+    );
+
+    expect(result.id).toBe("wamid.out");
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
+      type: "text",
+      to: "15551234567",
+      text: { body: "Hello from the *agent*.\n\nSecond paragraph." },
+    });
+  });
+
+  it("sends the same body as postMessage with the concatenated markdown", async () => {
+    const chunks = [
+      "# Title\n\n",
+      "- one\n",
+      "- **two**\n\n",
+      "Visit [docs](https://kapso.ai) ",
+      "_now_.",
+    ];
+    const streamed = setupFetch([sendPayload]);
+    const posted = setupFetch([sendPayload]);
+    const streamAdapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: streamed.fetchMock,
+    });
+    const postAdapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: posted.fetchMock,
+    });
+
+    await streamAdapter.stream(
+      streamAdapter.encodeThreadId(threadData),
+      streamOf(chunks),
+    );
+    await postAdapter.postMessage(postAdapter.encodeThreadId(threadData), {
+      markdown: chunks.join(""),
+    });
+
+    expect(streamed.calls).toHaveLength(1);
+    expect(JSON.parse(String(streamed.calls[0]?.init.body))).toEqual(
+      JSON.parse(String(posted.calls[0]?.init.body)),
+    );
+  });
+
+  it("includes markdown_text chunks and ignores task and plan updates", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+
+    await adapter.stream(
+      adapter.encodeThreadId(threadData),
+      streamOf<string | StreamChunk>([
+        "Checking ",
+        {
+          type: "task_update",
+          id: "t1",
+          title: "Look up order",
+          status: "in_progress",
+        },
+        { type: "markdown_text", text: "order **42**" },
+        { type: "plan_update", title: "Plan" },
+        ".",
+      ]),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
+      text: { body: "Checking order *42*." },
+    });
+  });
+
+  it.each([
+    ["an empty stream", []],
+    ["a whitespace-only stream", [" ", "\n\n"]],
+  ])("rejects %s without sending a message", async (_label, chunks) => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+
+    await expect(
+      adapter.stream(adapter.encodeThreadId(threadData), streamOf(chunks)),
+    ).rejects.toThrow("Message text cannot be empty");
+    expect(calls).toHaveLength(0);
+  });
+
+  it("keeps concurrent streams independent", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload, sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      fetch: fetchMock,
+    });
+
+    await Promise.all([
+      adapter.stream(
+        adapter.encodeThreadId({ phoneNumberId: "123", waId: "15550000001" }),
+        streamOf(["A1 ", "A2 ", "A3"]),
+      ),
+      adapter.stream(
+        adapter.encodeThreadId({ phoneNumberId: "123", waId: "15550000002" }),
+        streamOf(["B1 ", "B2 ", "B3"]),
+      ),
+    ]);
+
+    const bodies = calls.map((call) => JSON.parse(String(call.init.body)));
+    expect(bodies).toHaveLength(2);
+    expect(bodies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          to: "15550000001",
+          text: expect.objectContaining({ body: "A1 A2 A3" }),
+        }),
+        expect.objectContaining({
+          to: "15550000002",
+          text: expect.objectContaining({ body: "B1 B2 B3" }),
+        }),
+      ]),
+    );
+  });
+
+  it("delivers thread.post(fullStream) through a real Chat instance as one message", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      appSecret: "secret",
+      fetch: fetchMock,
+    });
+    const bot = new Chat({
+      userName: "support",
+      state: createMemoryState(),
+      adapters: { kapso: adapter },
+    });
+    // AI SDK fullStream events, including a step boundary and a tool call.
+    const fullStreamEvents = [
+      { type: "text-delta", text: "Step one is " },
+      { type: "text-delta", text: "**done**." },
+      { type: "tool-call", toolName: "lookup" },
+      { type: "finish-step" },
+      { type: "text-delta", text: "Step two." },
+    ];
+    let posted: unknown;
+    bot.onNewMention(async (thread) => {
+      posted = await thread.post(streamOf(fullStreamEvents));
+    });
+
+    const tasks: Promise<unknown>[] = [];
+    const response = await bot.webhooks.kapso(
+      signedRequest(textPayload("Hi"), "secret"),
+      { waitUntil: (task) => tasks.push(task) },
+    );
+    await Promise.all(tasks);
+
+    expect(response.status).toBe(200);
+    expect(posted).toMatchObject({ id: "wamid.out" });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0]?.init.body))).toMatchObject({
+      type: "text",
+      text: { body: "Step one is *done*.\n\nStep two." },
+    });
+  });
+
+  it("rejects thread.post(stream) without sending a partial reply when the stream throws", async () => {
+    const { fetchMock, calls } = setupFetch([sendPayload]);
+    const adapter = createKapsoAdapter({
+      accessToken: "token",
+      appSecret: "secret",
+      fetch: fetchMock,
+    });
+    const bot = new Chat({
+      userName: "support",
+      state: createMemoryState(),
+      adapters: { kapso: adapter },
+    });
+    let failure: unknown;
+    bot.onNewMention(async (thread) => {
+      async function* failingStream() {
+        yield "Partial answer";
+        await Promise.resolve();
+        throw new Error("model disconnected");
+      }
+      await thread.post(failingStream()).catch((error: unknown) => {
+        failure = error;
+      });
+    });
+
+    const tasks: Promise<unknown>[] = [];
+    await bot.webhooks.kapso(signedRequest(textPayload("Hi"), "secret"), {
+      waitUntil: (task) => tasks.push(task),
+    });
+    await Promise.all(tasks);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe("model disconnected");
+    expect(calls).toHaveLength(0);
+  });
+});
+
+async function* streamOf<T = string>(chunks: readonly T[]): AsyncGenerator<T> {
+  for (const chunk of chunks) {
+    await Promise.resolve();
+    yield chunk;
+  }
+}
 
 describe("KapsoFormatConverter", () => {
   it("converts markdown to WhatsApp formatting", () => {
